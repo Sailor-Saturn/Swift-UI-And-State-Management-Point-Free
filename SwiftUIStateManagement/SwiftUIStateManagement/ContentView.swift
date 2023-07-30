@@ -59,7 +59,7 @@ struct CounterView: View {
         .font(.title)
         .navigationBarTitle("Counter Demo")
         .sheet(isPresented: self.$isPrimeModalShown, onDismiss: { self.isPrimeModalShown = false }) {
-            IsPrimeModalView()
+            IsPrimeModalView(state: self.state)
         }
         .alert(isPresented: self.$isAlertNthPrimeShown) {
             Alert(
