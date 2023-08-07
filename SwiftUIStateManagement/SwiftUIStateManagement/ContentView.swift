@@ -11,7 +11,9 @@ struct ContentView: View {
                 NavigationLink(destination: CounterView(state: self.state)) {
                     Text("Counter Demo")
                 }
-                NavigationLink(destination: FavoritePrimes(state: self.state)) {
+                NavigationLink(destination: FavoritePrimes(
+                    favoritePrimes: $state.favoritePrimes,
+                    activityFeed: $state.activityFeed)) {
                     Text("Favourite Primes")
                 }
             }
@@ -29,6 +31,56 @@ private func ordinal(_ n: Int) -> String {
 class AppState: ObservableObject {
     @Published var count = 0
     @Published var favoritePrimes: [Int] = []
+    @Published var loggedInUser: User?
+    @Published var activityFeed: [Activity] = []
+    
+    struct User {
+        let id: Int
+        let name: String
+        let bio: String
+    }
+    
+    struct Activity {
+        let timestamp: Date
+        let type: ActivityType
+        
+        enum ActivityType {
+            case addedFavoritePrime(Int)
+            case removedFavoritePrime(Int)
+        }
+    }
+}
+
+extension AppState {
+    func addFavoritePrime() {
+        self.favoritePrimes.append (self.count)
+        self.activityFeed.append(
+            Activity(
+                timestamp: Date(),
+                type: .addedFavoritePrime(self.count)
+            )
+        )
+    }
+    
+    func removeFavoritePrime(_ prime: Int) {
+        self.favoritePrimes.removeAll(where: { $0 == prime })
+        self.activityFeed.append(
+            Activity(
+                timestamp: Date(),
+                type: .removedFavoritePrime (prime)
+            )
+        )
+    }
+    
+    func removeFavoritePrime() {
+        self.removeFavoritePrime(self .count)
+    }
+    
+    func removeFavoritePrimes(at indexSet: IndexSet) {
+        for index in indexSet {
+            self.removeFavoritePrime(self.favoritePrimes [index])
+        }
+    }
 }
 
 struct CounterView: View {
@@ -36,7 +88,8 @@ struct CounterView: View {
     @State var isPrimeModalShown: Bool = false
     @State var isAlertNthPrimeShown: Bool = false
     @State var alertNthPrime: Int?
-
+    @State var isNthPrimeBtnDisabled: Bool = false
+    
     var body: some View {
         VStack {
             HStack {
@@ -47,14 +100,9 @@ struct CounterView: View {
             Button(action: {
                 self.isPrimeModalShown = true
             }) { Text("Is this prime?")}
-            Button(action: {
-                nthPrime(self.state.count) { prime in
-                    self.alertNthPrime = prime
-                    self.isAlertNthPrimeShown = true
-                }
-            }) {
+            Button(action: self.nthPrimeButtonAction) {
                 Text("What's the \(ordinal(self.state.count)) prime?")
-            }
+            }.disabled(self.isNthPrimeBtnDisabled)
         }
         .font(.title)
         .navigationBarTitle("Counter Demo")
@@ -69,6 +117,16 @@ struct CounterView: View {
             )
         }
     }
+    
+    // Fire effect, no handling of side effect, no way of testing
+    func nthPrimeButtonAction() {
+        self.isNthPrimeBtnDisabled = true
+        nthPrime(self.state.count) { prime in
+            self.alertNthPrime = prime
+            self.isAlertNthPrimeShown = true
+            self.isNthPrimeBtnDisabled = false
+        }
+    }
 }
 
 private func isPrime(_ p: Int) -> Bool {
@@ -81,20 +139,20 @@ private func isPrime(_ p: Int) -> Bool {
 }
 
 func nthPrime(_ n: Int, callback: @escaping (Int?) -> Void) -> Void {
-  wolframAlpha(query: "prime \(n)") { result in
-    callback(
-      result
-        .flatMap {
-          $0.queryresult
-            .pods
-            .first(where: { $0.primary == .some(true) })?
-            .subpods
-            .first?
-            .plaintext
-        }
-        .flatMap(Int.init)
-    )
-  }
+    wolframAlpha(query: "prime \(n)") { result in
+        callback(
+            result
+                .flatMap {
+                    $0.queryresult
+                        .pods
+                        .first(where: { $0.primary == .some(true) })?
+                        .subpods
+                        .first?
+                        .plaintext
+                }
+                .flatMap(Int.init)
+        )
+    }
 }
 
 // Lets split the views into smaller components
@@ -107,17 +165,23 @@ struct IsPrimeModalView: View {
             if isPrime(self.state.count) {
                 Text("SOMEBODY HEEEELPPPP THIS GUY HAS A  PRIMEEEE \(self.state.count)")
                 if self.state.favoritePrimes.contains(self.state.count) {
-                    Button(action: {self.state.favoritePrimes.removeAll { fav in
-                        fav == self.state.count
-                    }}) {
+                    Button(action: {
+                        self.state.favoritePrimes.removeAll { $0 == self.state.count }
+                        self.state.activityFeed.append(.init(timestamp: Date(),
+                                                             type: .removedFavoritePrime(self.state.count)))
+                    }) {
                         Text("Remove From Favorites")
                     }
                 } else {
-                    Button(action: {self.state.favoritePrimes.append(self.state.count)}) {
+                    Button(action: {
+                        self.state.favoritePrimes.append(self.state.count)
+                        self.state.activityFeed.append(.init(timestamp: Date(), type:
+                                .addedFavoritePrime (self.state.count)))
+                    }) {
                         Text("Save To Favorites")
                     }
                 }
-               
+                
             } else {
                 Text("Phew, \(self.state.count) is not a prime  we're safe")
             }
@@ -129,54 +193,60 @@ struct IsPrimeModalView: View {
 
 // MARK: FavoritePrimesView
 struct FavoritePrimes: View {
-    @ObservedObject var state: AppState
-
-      var body: some View {
-          List{
-              ForEach(self.state.favoritePrimes, id: \.self) { prime in
-                  Text("\(prime)")
-              }
-              .onDelete { indexSet in
-                  for index in indexSet {
-                      self.state.favoritePrimes.remove(at: index)
-                  }
-              }
-          }
-          .navigationBarTitle(Text("Favorite Primes"))
-      }
+    // Receives all app state even though it only needs to handle the favorites prime
+    //    @ObservedObject var state: AppState
+    @Binding var favoritePrimes: [Int]
+    @Binding var activityFeed: [AppState.Activity]
+    
+    var body: some View {
+        List{
+            ForEach(favoritePrimes, id: \.self) { prime in
+                Text("\(prime)")
+            }
+            .onDelete { indexSet in
+                for index in indexSet {
+                    let prime = favoritePrimes[index]
+                    favoritePrimes.remove(at: index)
+                    activityFeed.append(.init(timestamp: Date(), type:
+                            .removedFavoritePrime (prime)))
+                }
+            }
+        }
+        .navigationBarTitle(Text("Favorite Primes"))
+    }
 }
 
 struct WolframAlphaResult: Decodable {
-  let queryresult: QueryResult
-
-  struct QueryResult: Decodable {
-    let pods: [Pod]
-
-    struct Pod: Decodable {
-      let primary: Bool?
-      let subpods: [SubPod]
-
-      struct SubPod: Decodable {
-        let plaintext: String
-      }
+    let queryresult: QueryResult
+    
+    struct QueryResult: Decodable {
+        let pods: [Pod]
+        
+        struct Pod: Decodable {
+            let primary: Bool?
+            let subpods: [SubPod]
+            
+            struct SubPod: Decodable {
+                let plaintext: String
+            }
+        }
     }
-  }
 }
 
 func wolframAlpha(query: String, callback: @escaping (WolframAlphaResult?) -> Void) -> Void {
-  var components = URLComponents(string: "https://api.wolframalpha.com/v2/query")!
-  components.queryItems = [
-    URLQueryItem(name: "input", value: query),
-    URLQueryItem(name: "format", value: "plaintext"),
-    URLQueryItem(name: "output", value: "JSON"),
-    URLQueryItem(name: "appid", value: "6HQW2P-JVRK3XWGK7"),
-  ]
-
-  URLSession.shared.dataTask(with: components.url(relativeTo: nil)!) { data, response, error in
-    callback(
-      data
-        .flatMap { try? JSONDecoder().decode(WolframAlphaResult.self, from: $0) }
-    )
+    var components = URLComponents(string: "https://api.wolframalpha.com/v2/query")!
+    components.queryItems = [
+        URLQueryItem(name: "input", value: query),
+        URLQueryItem(name: "format", value: "plaintext"),
+        URLQueryItem(name: "output", value: "JSON"),
+        URLQueryItem(name: "appid", value: "6HQW2P-JVRK3XWGK7"),
+    ]
+    
+    URLSession.shared.dataTask(with: components.url(relativeTo: nil)!) { data, response, error in
+        callback(
+            data
+                .flatMap { try? JSONDecoder().decode(WolframAlphaResult.self, from: $0) }
+        )
     }
     .resume()
 }
